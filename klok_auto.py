@@ -192,7 +192,7 @@ class Klok:
             logger.error(f'{self.index}, {self.proxy} 获取速率限制异常: {e}')
             return None, 0
 
-    async def chat(self, messages: list, chat_id: str,model: str = "llama-3.3-70b-instruct"):
+    async def chat(self, messages: list, chat_id: str, model: str = "llama-3.3-70b-instruct"):
         """发送聊天请求"""
         try:
             chat_data = {
@@ -204,26 +204,55 @@ class Klok:
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "language": "english"
             }
-            
+
             # 设置超时
             timeout = aiohttp.ClientTimeout(total=None)  # 无限超时
-            
+
             async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    'https://api1-pp.klokapp.ai/v1/chat',
-                    json=chat_data,
-                    headers=self.scraper.header,
-                    proxy=self.proxy,
-                    ssl=False
-                ) as response:
-                    if response.status != 200:
-                        logger.error(f'{self.index}, {self.proxy} 聊天请求失败: {response.status}')
-                        return False
-                    
-                    # 等待10秒
-                    await asyncio.sleep(10)
-                    return True
-                    
+                start_time = datetime.now()
+                try:
+                    async with session.post(
+                            'https://api1-pp.klokapp.ai/v1/chat',
+                            json=chat_data,
+                            headers=self.scraper.header,
+                            proxy=self.proxy,
+                            ssl=False,
+                            timeout=timeout
+                    ) as response:
+                        if response.status != 200:
+                            logger.error(f'{self.index}, {self.proxy} 聊天请求失败: {response.status}')
+                            return False
+
+                        # 使用event-stream处理响应
+                        logger.info(f'{self.index}, {self.proxy} 开始接收流式响应')
+                        buffer = ""
+                        async for line in response.content:
+                            # 检查是否超过2分钟
+                            current_time = datetime.now()
+                            if (current_time - start_time).total_seconds() > 120:
+                                logger.warning(f'{self.index}, {self.proxy} 聊天超过2分钟，断开连接')
+                                return True
+
+                            # 可选：处理event-stream数据
+                            try:
+                                decoded_line = line.decode('utf-8')
+                                if decoded_line.startswith('data:'):
+                                    data = decoded_line[5:].strip()
+                                    if data == '[DONE]':
+                                        break
+                            except Exception as e:
+                                pass  # 忽略解析错误，继续接收数据
+
+                        logger.success(f'{self.index}, {self.proxy} 聊天完成')
+                        return True
+
+                except asyncio.TimeoutError:
+                    logger.error(f'{self.index}, {self.proxy} 聊天请求超时')
+                    return False
+                except Exception as e:
+                    logger.error(f'{self.index}, {self.proxy} 处理聊天流式响应异常: {e}')
+                    return False
+
         except Exception as e:
             logger.error(f'{self.index}, {self.proxy} 发送聊天请求异常: {e}')
             return False
